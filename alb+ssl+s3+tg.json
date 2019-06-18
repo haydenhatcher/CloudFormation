@@ -1,0 +1,331 @@
+{
+	"AWSTemplateFormatVersion": "2010-09-09",
+	"Description": "ALB Application Load Balancer, S3 For Logs, HTTP to HTTPS forwarding, SourceIpConfig Rules, Target Group",
+	"Parameters": {
+		"ALBName": {
+			"Type": "String",
+			"Default": "AUPRD00WEBALB01"
+		},
+		"VPC": {
+			"Type": "AWS::EC2::VPC::Id",
+			"Default": "vpc-0000000"
+		},
+		"ALBSubnetList": {
+			"Type": "List<AWS::EC2::Subnet::Id>",
+			"Default": "subnet-111111,subnet-2222222,subnet-3333333"
+		},
+		"ALBExistingCertArn1": {
+			"Type": "String",
+			"Default": "arn:aws:acm:ap-southeast-2:1111111111:certificate/1111111-1111-1111-1111-111111111111"
+        },
+        "ALBExistingCertArn2": {
+			"Type": "String",
+			"Default": ""
+        },
+        "ALBListenerSSLRule1Con1": {
+            "Type": "String",
+			"Default": "domain.com"
+        },
+        "LogBucketNamePrefix": {
+            "Type": "String",
+			"Default": "alb-logs-"
+        },
+        "TargetGroupName": {
+            "Type": "String",
+            "Default": "web"
+        },
+        "TargetGroupStickyEnabled": {
+            "Type": "String",
+            "Default": "true"
+        },    
+        "TargetGroupCookieDuration": {
+            "Type": "String",
+            "Default": "86400"
+        }
+    },
+    "Conditions": {
+        "UseALBExistingCertArn2": {
+            "Fn::Not": [
+            {
+                "Fn::Equals": [
+                {
+                    "Ref": "ALBExistingCertArn2"
+                },
+                ""
+                ]
+            }
+            ]
+        }
+    },
+	"Resources": {
+        "S3forALBLogs": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+                "BucketName": {"Fn::Join" : ["",[{"Ref" : "LogBucketNamePrefix"},{"Ref": "AWS::AccountId"}]]},
+                "AccessControl": "BucketOwnerFullControl",
+                "LifecycleConfiguration": {
+                    "Rules": [
+                    {
+                        "Status": "Enabled",
+                        "Transitions": [
+                            {
+                                "TransitionInDays": 90,
+                                "StorageClass": "GLACIER"
+                            }
+                        ],
+                        "ExpirationInDays": 730
+                        }
+                    ]
+                },
+                "Tags": [
+                    {
+                        "Value": {"Ref": "AWS::StackName"},
+                        "Key": "Name"
+                    }
+                ]
+            }
+        },
+        "S3forALBLogsPolicy": {
+            "Type": "AWS::S3::BucketPolicy",
+            "Properties": {
+                "Bucket": {"Ref": "S3forALBLogs"},
+                "PolicyDocument": {
+                "Version": "2008-10-17",
+                "Statement": [
+                    {
+                    "Action": [
+                        "s3:PutObject"
+                    ],
+                    "Sid": "ELBAccessLogs20130930",
+                    "Resource": {
+                        "Fn::Sub": "arn:aws:s3:::${S3forALBLogs}/*"
+                    },
+                    "Effect": "Allow",
+                    "Principal": {
+                        "AWS": [
+                        {
+                            "Fn::FindInMap": ["ALBAWSAccountIDs",{"Ref": "AWS::Region"},"accountid"]
+                        }
+                        ]
+                    }
+                    }
+                ]
+                }
+            }
+        },
+        "ALBSecurityGroup": {
+			"Type": "AWS::EC2::SecurityGroup",
+			"Properties": {
+				"GroupDescription": "Allow incoming from anywhere to HTTPS and HTTP",
+				"SecurityGroupIngress": [
+					{
+						"CidrIp": "0.0.0.0/0",
+						"FromPort": 80,
+						"IpProtocol": "tcp",
+						"ToPort": 80
+					},
+					{
+						"CidrIp": "0.0.0.0/0",
+						"FromPort": 443,
+						"IpProtocol": "tcp",
+						"ToPort": 443
+					}
+				],
+				"VpcId": {"Ref" : "VPC"}
+			}
+        },
+        "TargetGroupHTTP": {
+            "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+            "Properties": {
+                "Name": {"Ref": "TargetGroupName"},        
+                "VpcId": {"Ref": "VPC"},
+                "Protocol": "HTTP",
+                "Port": "80",
+                "HealthCheckProtocol": "HTTP",
+                "HealthCheckPath": "/",
+                "HealthCheckPort": "traffic-port",       
+                "HealthyThresholdCount": 5,
+                "UnhealthyThresholdCount": 2,
+                "HealthCheckTimeoutSeconds": 5,
+                "HealthCheckIntervalSeconds": 30,
+                "Matcher": {"HttpCode": "200-299"},
+                "TargetGroupAttributes": [
+                    {
+                    "Key": "stickiness.enabled",
+                    "Value": {"Ref": "TargetGroupStickyEnabled"}
+                    },
+                    {
+                    "Key": "stickiness.type",
+                    "Value": "lb_cookie" 
+                    },
+                    {
+                    "Key": "stickiness.lb_cookie.duration_seconds",
+                    "Value": {"Ref": "TargetGroupCookieDuration"}
+                    },
+                    {
+                    "Key": "deregistration_delay.timeout_seconds",
+                    "Value": "300"
+                    }
+                ],
+                "Tags": [
+                    {
+                    "Key": "CloudformationStackName",
+                    "Value": {"Ref": "AWS::StackName"}
+                    }
+                ]
+            }
+        },
+		"ALBInstance": {
+			"Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+			"Properties": {
+				"LoadBalancerAttributes": [
+					{
+						"Key": "deletion_protection.enabled",
+						"Value": "true"
+					},
+					{
+						"Key": "access_logs.s3.enabled",
+						"Value": "true"
+					},
+					{
+						"Key": "access_logs.s3.bucket",
+						"Value": {"Ref" : "S3forALBLogs"}
+					},
+					{
+						"Key": "access_logs.s3.prefix",
+						"Value": {"Ref" : "ALBName"}
+					}
+				],
+				"Name": {"Ref" : "ALBName"},
+				"Scheme": "internet-facing",
+				"Subnets": {"Ref" : "ALBSubnetList"},
+				"SecurityGroups": [{"Ref" : "ALBSecurityGroup"}]
+			}
+        },
+        "ALBListener": {
+			"Type": "AWS::ElasticLoadBalancingV2::Listener",
+			"Properties": {
+				"DefaultActions": [
+					{
+						"RedirectConfig": {
+							"Host": "#{host}",
+							"Path": "/#{path}",
+							"Port": 443,
+							"Protocol": "HTTPS",
+							"Query": "#{query}",
+							"StatusCode": "HTTP_301"
+						},
+						"Type": "redirect"
+					}
+				],
+				"LoadBalancerArn": {"Ref" : "ALBInstance"},
+				"Port": 80,
+				"Protocol": "HTTP"
+			}
+        },
+		"ALBListenerSSL": {
+			"Type": "AWS::ElasticLoadBalancingV2::Listener",
+			"Properties": {
+                "DefaultActions": [
+                    {
+                      "TargetGroupArn": {"Ref": "TargetGroupHTTP"},
+                      "Type": "forward"
+                    }
+                ],
+                "Certificates": [{"CertificateArn": {"Ref" : "ALBExistingCertArn1"}}],
+                "LoadBalancerArn": {"Ref" : "ALBInstance"},
+                "Port": 443,
+                "Protocol": "HTTPS"
+			}
+        },
+        "ALBListenerSSLCerts": {
+        "Type" : "AWS::ElasticLoadBalancingV2::ListenerCertificate",
+            "Properties" : {
+                "Certificates" : [{"CertificateArn": {"Ref" : "ALBExistingCertArn1"}},{"CertificateArn": {"Ref" : "ALBExistingCertArn2"}}],
+                "ListenerArn" : {"Ref" : "ALBListenerSSL"}
+            },
+        "Condition": "UseALBExistingCertArn2"    
+        },
+		"ALBListenerSSLRule1": {
+			"Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
+			"Properties": {
+				"Actions": [
+                    {
+                        "TargetGroupArn": {"Ref": "TargetGroupHTTP"},
+                        "Type": "forward"
+                    }
+				],
+				"Conditions": [
+					{
+						"Field": "host-header",
+						"Values": [{"Ref" : "ALBListenerSSLRule1Con1"}]
+                    },
+                    {
+						"Field": "source-ip",
+						"SourceIpConfig": {"Values":["1.1.1.0/20","2.2.2.0/20","3.3.3.0/21","4.4.4.4/21"]}
+					}
+				],
+				"ListenerArn": {
+					"Ref": "ALBListenerSSL"
+				},
+				"Priority": 10
+			}
+        },
+        "ALBListenerSSLRule2": {
+			"Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
+			"Properties": {
+				"Actions": [
+                    {
+                        "FixedResponseConfig" : {
+                            "ContentType" : "text/plain",
+                            "MessageBody" : "This Website is restricted to Ranges",
+                            "StatusCode" : "403"
+                          },
+                        "Type": "fixed-response"
+                    }
+				],
+				"Conditions": [
+					{
+						"Field": "host-header",
+						"Values": [{"Ref" : "ALBListenerSSLRule1Con1"}]
+                    }
+				],
+				"ListenerArn": {
+					"Ref": "ALBListenerSSL"
+				},
+				"Priority": 40
+			}
+		}
+	},
+	"Outputs": {
+		"ALBEndpoint": {
+			"Value": { "Fn::GetAtt" : [ "ALBInstance", "DNSName" ] },
+			"Description": "ALB Application Load Balancer DNS Name"
+		},
+		"ALBName": {
+			"Value": { "Fn::GetAtt" : [ "ALBInstance", "LoadBalancerFullName" ] },
+			"Description": "ALB Application Load Balancer Name"
+		}
+	},
+    "Mappings": {
+        "ALBAWSAccountIDs": {
+          "us-west-1": {"accountid": "027434742980"},
+          "us-east-1": {"accountid": "127311923021"},
+          "us-east-2": {"accountid": "033677994240"},
+          "ap-northeast-1": {"accountid": "582318560864"},
+          "eu-west-1": {"accountid": "156460612806"},
+          "ap-northeast-2": {"accountid": "600734575887"},
+          "eu-central-1": {"accountid": "054676820928"},
+          "ap-southeast-1": {"accountid": "114774131450"},
+          "ca-central-1": {"accountid": "985666609251"},
+          "ap-southeast-2": {"accountid": "783225319266"},
+          "us-west-2": {"accountid": "797873946194"},
+          "us-gov-west-1": {"accountid": "048591011584"},
+          "ap-south-1": {"accountid": "718504428378"},
+          "cn-north-1": {"accountid": "638102146993"},
+          "sa-east-1": {"accountid": "507241528517"},
+          "eu-west-2": {"accountid": "652711504416"},
+          "eu-west-3": {"accountid": "009996457667"}
+        }
+    }
+}
