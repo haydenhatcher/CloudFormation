@@ -162,32 +162,33 @@
                         
                 "        try:",
                             
-                "            zones = route53.list_hosted_zones(MaxItems='1000')['HostedZones']",
-                            
-                "            for zone in zones: ",       
+                "            paginate_hosted_zones = route53.get_paginator('list_hosted_zones')",
+                        
+                "            for zone_page in paginate_hosted_zones.paginate():",
+                "                for zone in zone_page['HostedZones']:",     
                                 
-                "                zone_name = zone['Name']",
-                "                print ('Exporting -' + zone_name)",
+                "                    zone_name = zone['Name']",
+                "                   print ('Exporting -' + zone_name)",
                                 
-                "                zone_id = route53.get_hosted_zone(Id=zone['Id'])",
-                "                newzone = zone_id['HostedZone']['Id']",
+                "                    zone_id = route53.get_hosted_zone(Id=zone['Id'])",
+                "                    newzone = zone_id['HostedZone']['Id']",
                                 
-                "                all_rrs = [];",
+                "                   all_rrs = [];",
                                 
-                "                zone_rr = route53.list_resource_record_sets(HostedZoneId=newzone)",
-                "                next_record = None",
+                "                   zone_rr = route53.list_resource_record_sets(HostedZoneId=newzone)",
+                "                   next_record = None",
                     
-                "                for rr in zone_rr['ResourceRecordSets']:",
-                "                    all_rrs.append(rr)",
+                "                   for rr in zone_rr['ResourceRecordSets']:",
+                "                       all_rrs.append(rr)",
                                 
-                "                while zone_rr['IsTruncated'] == True:",
-                "                    next_record = zone_rr['NextRecordName']",
-                "                    zone_rr = route53.list_resource_record_sets(HostedZoneId=newzone,StartRecordName=next_record)",
+                "                   while zone_rr['IsTruncated'] == True:",
+                "                       next_record = zone_rr['NextRecordName']",
+                "                       zone_rr = route53.list_resource_record_sets(HostedZoneId=newzone,StartRecordName=next_record)",
                                         
-                "                    for rr in zone_rr['ResourceRecordSets']:",
-                "                        all_rrs.append(rr)",
+                "                       for rr in zone_rr['ResourceRecordSets']:",
+                "                           all_rrs.append(rr)",
                     
-                "                s3.Bucket(backup_bucket).put_object(Key=today + '/' + source_account_name + '/' + zone_name, Body=str(all_rrs))",
+                "                   s3.Bucket(backup_bucket).put_object(Key=today + '/' + source_account_name + '/' + zone_name, Body=str(all_rrs))",
                                
                                 
                 "        except Exception as e:",
